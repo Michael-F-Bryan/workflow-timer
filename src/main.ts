@@ -36,22 +36,13 @@ async function run(): Promise<void> {
         const {change, emoji} = getSeverity(percentDifference);
         const p = Math.abs(percentDifference).toFixed(2);
 
+        // prettier-ignore
         const content = `
-# ${header}
+## ${header}
 
-${emoji} The run time for ["${ctx.workflow}"](${current.url}) has ${change}
-by ${formatDuration(difference)} (${p}%) ${emoji}
+${emoji} The run time for ["${ctx.workflow}"](${current.url}) has ${change} by ${formatDuration(difference)} (${p}%) ${emoji}
 
-The current run time is ${formatDuration(
-            current.duration,
-        )} while ${branch} took ${formatDuration(previousRun)}.
-
-<small>
-Please report any feedback or bugs to
-    <a href="https://github.com/Michael-F-Bryan/workflow-timer">
-    <code>Michael-F-Bryan/workflow-timer</code>
-    </a>.
-</small>
+The current run time is ${formatDuration(current.duration)} while \`${branch}\` took ${formatDuration(previousRun)}.
         `;
 
         await postTimings(client, content);
@@ -89,9 +80,9 @@ async function postTimings(client: Client, body: string) {
 }
 
 function getSeverity(percentage: number): {change: string; emoji: string} {
-    if (percentage > 100) {
+    if (percentage > 50) {
         return {
-            change: "regressed severely",
+            change: "**regressed severely**",
             emoji: "😭",
         };
     } else if (percentage > 20) {
@@ -109,14 +100,14 @@ function getSeverity(percentage: number): {change: string; emoji: string} {
             change: "improved slightly",
             emoji: "🙂",
         };
-    } else if (percentage > -100) {
+    } else if (percentage > -50) {
         return {
-            change: "improved a bit",
+            change: "improved a lot",
             emoji: "🥳",
         };
     } else {
         return {
-            change: "improved significantly",
+            change: "**improved significantly**",
             emoji: "🤯",
         };
     }
