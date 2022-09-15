@@ -1,11 +1,10 @@
-name: 'Your name here'
-description: 'Provide a description here'
-author: 'Your name or organization here'
+name: "Michael-F-Bryan"
+description: "Keep an eye on how long your GitHub Actions jobs are taking."
+author: "Michael-F-Bryan <michaelfbryan@gmail.com>"
 inputs:
-  milliseconds: # change this
+  token:
     required: true
-    description: 'input description here'
-    default: 'default value if applicable'
+    description: "A GitHub token that can access this repo (e.g. `${{ secrets.GITHUB_TOKEN }}`)"
 runs:
-  using: 'node16'
-  main: 'dist/index.js'
+  using: "node16"
+  main: "dist/index.js"
