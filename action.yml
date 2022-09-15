@@ -4,7 +4,7 @@ author: "Michael-F-Bryan <michaelfbryan@gmail.com>"
 inputs:
   token:
     required: true
-    description: "A GitHub token that can access this repo (e.g. `${{ secrets.GITHUB_TOKEN }}`)"
+    description: "A GitHub token that can access this repo (e.g. `secrets.GITHUB_TOKEN`)"
 runs:
   using: "node16"
   main: "dist/index.js"
