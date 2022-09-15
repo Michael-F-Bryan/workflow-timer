@@ -9,10 +9,12 @@ const {owner, repo} = ctx.repo;
 const header = "⏱ Workflow Timer ⏱";
 
 async function run(): Promise<void> {
+    // Original inspiration: https://github.com/DeviesDevelopment/workflow-timer/blob/master/action.yml
+
     try {
         if (ctx.eventName != "pull_request") {
             console.log(
-                "This workflow only runs on pull requests. Skipping..."
+                "This workflow only runs on pull requests. Skipping...",
             );
             return;
         }
@@ -32,23 +34,24 @@ async function run(): Promise<void> {
         const difference = current.duration - previousRun;
         const percentDifference = (difference * 100) / previousRun;
         const {change, emoji} = getSeverity(percentDifference);
+        const p = Math.abs(percentDifference).toFixed(2);
 
         const content = `
-          # ${emoji} ${header} ${emoji}
+# ${header}
 
-          The run time for "${ctx.workflow}" has ${change}
-          by ${formatDuration(difference)} (${Math.abs(percentDifference)}%).
+${emoji} The run time for ["${ctx.workflow}"](${current.url}) has ${change}
+by ${formatDuration(difference)} (${p}%) ${emoji}
 
-          The current run time is ${formatDuration(
-              current.duration
-          )} while ${branch} took ${formatDuration(previousRun)}.
+The current run time is ${formatDuration(
+            current.duration,
+        )} while ${branch} took ${formatDuration(previousRun)}.
 
-          <small>
-            Please report any feedback or bugs to
-              <a href="https://github.com/Michael-F-Bryan/workflow-timer">
-                <code>Michael-F-Bryan/workflow-timer</code>
-              </a>.
-          </small>
+<small>
+Please report any feedback or bugs to
+    <a href="https://github.com/Michael-F-Bryan/workflow-timer">
+    <code>Michael-F-Bryan/workflow-timer</code>
+    </a>.
+</small>
         `;
 
         await postTimings(client, content);
@@ -61,11 +64,11 @@ async function postTimings(client: Client, body: string) {
     const comments = await client.rest.issues.listComments({
         owner,
         repo,
-        issue_number: ctx.issue.number
+        issue_number: ctx.issue.number,
     });
 
     const previousTimings = comments.data.find(comment =>
-        comment.body?.includes(header)
+        comment.body?.includes(header),
     );
 
     if (previousTimings) {
@@ -73,14 +76,14 @@ async function postTimings(client: Client, body: string) {
             owner,
             repo,
             comment_id: previousTimings.id,
-            body
+            body,
         });
     } else {
         await client.rest.issues.createComment({
             issue_number: ctx.issue.number,
             owner,
             repo,
-            body
+            body,
         });
     }
 }
@@ -89,32 +92,32 @@ function getSeverity(percentage: number): {change: string; emoji: string} {
     if (percentage > 100) {
         return {
             change: "regressed severely",
-            emoji: "😭"
+            emoji: "😭",
         };
     } else if (percentage > 20) {
         return {
             change: "regressed a bit",
-            emoji: "😥"
+            emoji: "😥",
         };
     } else if (percentage > 0) {
         return {
             change: "regressed slightly",
-            emoji: "🙁"
+            emoji: "🙁",
         };
     } else if (percentage > -20) {
         return {
             change: "improved slightly",
-            emoji: "🙂"
+            emoji: "🙂",
         };
     } else if (percentage > -100) {
         return {
             change: "improved a bit",
-            emoji: "🥳"
+            emoji: "🥳",
         };
     } else {
         return {
             change: "improved significantly",
-            emoji: "🤯"
+            emoji: "🤯",
         };
     }
 }
@@ -124,7 +127,9 @@ function formatDuration(totalSeconds: number): string {
     const minutes = Math.floor(totalSeconds / 60);
     const secs = Math.trunc(totalSeconds - minutes * 60);
 
-    if (minutes > 0) {
+    if (minutes == 1) {
+        return `${minutes}min ${secs}s`;
+    } else if (minutes > 0) {
         return `${minutes}mins ${secs}s`;
     } else {
         return `${secs}s`;
@@ -134,13 +139,14 @@ function formatDuration(totalSeconds: number): string {
 type CurrentRun = {
     duration: number;
     workflowId: number;
+    url: string;
 };
 
 async function currentRun(client: Client): Promise<CurrentRun> {
     const currentRun = await client.rest.actions.getWorkflowRun({
         owner,
         repo,
-        run_id: ctx.runId
+        run_id: ctx.runId,
     });
     const {run_started_at, workflow_id} = currentRun.data;
     if (!run_started_at) {
@@ -152,29 +158,30 @@ async function currentRun(client: Client): Promise<CurrentRun> {
 
     return {
         duration: durationMs / 1000,
-        workflowId: workflow_id
+        workflowId: workflow_id,
+        url: currentRun.data.html_url,
     };
 }
 
 async function defaultBranchRunTime(
     client: Client,
-    workflow: number
+    workflow: number,
 ): Promise<{previousRun: number; branch: string} | undefined> {
     const {
-        data: {default_branch}
+        data: {default_branch},
     } = await client.rest.repos.get(ctx.repo);
 
     const historicalRuns = await client.rest.actions.listWorkflowRuns({
         owner,
         repo,
-        workflow_id: workflow
+        workflow_id: workflow,
     });
 
     const successfulRuns = historicalRuns.data.workflow_runs.filter(
         run =>
             run.head_branch == default_branch &&
             run.status == "completed" &&
-            run.conclusion == "success"
+            run.conclusion == "success",
     );
 
     const latestRun = successfulRuns.shift();
@@ -186,7 +193,7 @@ async function defaultBranchRunTime(
     const started = new Date(latestRun.run_started_at).getTime();
     return {
         previousRun: (lastUpdated - started) / 1000,
-        branch: default_branch
+        branch: default_branch,
     };
 }
 
