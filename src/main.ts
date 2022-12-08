@@ -1,5 +1,6 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
+import packageJson from "../package.json";
 
 type Client = ReturnType<typeof github.getOctokit>;
 
@@ -8,47 +9,293 @@ const {owner, repo} = ctx.repo;
 
 const header = "⏱ Workflow Timer ⏱";
 
-async function run(): Promise<void> {
-    // Original inspiration: https://github.com/DeviesDevelopment/workflow-timer/blob/master/action.yml
+type Config = {
+    /**
+     * The name of the branch we are comparing this workflow against.
+     */
+    defaultBranch: string;
+    /** The current pull request's number. This is used so we can see the
+     * timings for all other workflow runs in a particular PR.
+     */
+    pullRequest: number;
+    /**
+     * The ID for the workflow being checked (e.g. ".github/workflows/ci.yml").
+     */
+    workflowId: string;
+    /** The ID for the current run of this workflow. */
+    currentRunId: number;
+    /**
+     * Which jobs do we want to monitor?
+     */
+    jobsToMonitor: string[];
+};
 
+type CommentInputs = {
+    /** The timings we'll be comparing against */
+    defaultBranch?: WorkflowRun & {branchName: string};
+    /** The timings for the current CI run. */
+    currentRun: WorkflowRun;
+    /** Timing information for previous runs in the same PR. */
+    previousRuns: WorkflowRun[];
+    /** The names of each of the jobs we are measuring. */
+    jobNames: string[];
+};
+
+/**
+ * Timing information for a particular CI run.
+ */
+type WorkflowRun = {
+    /** The ID for this run of the workflow. */
+    runId: number;
+    /** The URL for viewing the overall run on GitHub. */
+    htmlUrl: string;
+    /** The commit the workflow corresponds to. */
+    commitHash: string;
+    /** Timings for each of the jobs in the workflow. */
+    jobs: JobTimes[];
+    /** When the run was started. */
+    started: string;
+};
+
+type JobTimes = {
+    name: string;
+    /** A URL to view the  */
+    url: string;
+    duration: number;
+};
+
+type CurrentRun = {
+    duration: number;
+    workflowId: number;
+    url: string;
+};
+
+async function run() {
     try {
-        if (ctx.eventName != "pull_request") {
-            console.log(
+        const token = core.getInput("token");
+        const client = github.getOctokit(token);
+
+        const pullRequest = ctx.payload.pull_request?.number;
+
+        if (pullRequest == undefined) {
+            core.notice(
                 "This workflow only runs on pull requests. Skipping...",
             );
             return;
         }
 
-        const token = core.getInput("token");
-        const client = github.getOctokit(token);
-
-        const current = await currentRun(client);
-
-        const prev = await defaultBranchRunTime(client, current.workflowId);
-        if (!prev) {
-            console.log("No recent runs to compare against. Skipping...");
-            return;
-        }
-        const {previousRun, branch} = prev;
-
-        const difference = current.duration - previousRun;
-        const percentDifference = (difference * 100) / previousRun;
-        const {change, emoji} = getSeverity(percentDifference);
-        const p = Math.abs(percentDifference).toFixed(2);
-
-        // prettier-ignore
-        const content = `
-## ${header}
-
-${emoji} The run time for ["${ctx.workflow}"](${current.url}) has ${change} by ${formatDuration(difference)} (${p}%) ${emoji}
-
-The current run time is ${formatDuration(current.duration)} while \`${branch}\` took ${formatDuration(previousRun)}.
-        `;
-
-        await postTimings(client, content);
+        const config: Config = await loadConfig(client, pullRequest);
+        const timings: CommentInputs = await calculateAllTimings(
+            client,
+            config,
+        );
+        const body = formatComment(timings);
+        await postTimings(client, body);
     } catch (error) {
-        if (error instanceof Error) core.setFailed(error.message);
+        console.error(error);
+
+        if (error instanceof Error) {
+            core.setFailed(error.message);
+        } else if (typeof error == "string") {
+            core.setFailed(error);
+        } else {
+            core.setFailed("An unknown error has occurred");
+        }
     }
+}
+
+async function calculateAllTimings(
+    client: Client,
+    config: Config,
+): Promise<CommentInputs> {
+    const currentRun = await getTimings(
+        client,
+        config.currentRunId,
+        config.jobsToMonitor,
+    );
+
+    const defaultBranch = await getDefaultBranchTimings(
+        client,
+        config.defaultBranch,
+        config.workflowId,
+        config.jobsToMonitor,
+    );
+
+    const previousRuns = await getPreviousRunTimings(
+        client,
+        config.pullRequest,
+        config.workflowId,
+        config.jobsToMonitor,
+    );
+
+    return {
+        currentRun,
+        defaultBranch,
+        previousRuns,
+        jobNames: config.jobsToMonitor,
+    };
+}
+
+async function getPreviousRunTimings(
+    client: Client,
+    pr: number,
+    workflow: string,
+    jobNames: string[],
+): Promise<WorkflowRun[]> {
+    return [];
+}
+
+async function getDefaultBranchTimings(
+    client: Client,
+    branch: string,
+    workflow: string,
+    jobNames: string[],
+): Promise<(WorkflowRun & {branchName: string}) | undefined> {
+    const {
+        data: {default_branch},
+    } = await client.rest.repos.get(ctx.repo);
+
+    const historicalRuns = await client.rest.actions.listWorkflowRuns({
+        owner,
+        repo,
+        workflow_id: workflow,
+    });
+
+    const successfulRuns = historicalRuns.data.workflow_runs.filter(
+        run =>
+            run.head_branch == default_branch &&
+            run.status == "completed" &&
+            run.conclusion == "success",
+    );
+
+    const latestRun = successfulRuns.shift();
+    if (!latestRun || !latestRun.run_started_at) {
+        return;
+    }
+
+    const timings = await getTimings(client, latestRun.id, jobNames);
+    return {
+        branchName: branch,
+        ...timings,
+    };
+}
+
+async function getTimings(
+    client: Client,
+    runId: number,
+    jobNames: string[],
+): Promise<WorkflowRun> {
+    const run = await client.rest.actions.getWorkflowRun({
+        owner,
+        repo,
+        run_id: runId,
+    });
+    const allJobs = await client.rest.actions.listJobsForWorkflowRun({
+        owner,
+        repo,
+        run_id: runId,
+    });
+
+    const jobs: JobTimes[] = [];
+
+    for (const job of allJobs.data.jobs.filter(j =>
+        jobNames.includes(j.name),
+    )) {
+        const {started_at, completed_at, name, html_url, url} = job;
+        if (!completed_at) {
+            core.warning(
+                `Unable to get timings for "${name}" on run ${runId} (${run.data.html_url}) because it hasn't finished yet (${html_url})`,
+            );
+            continue;
+        }
+
+        const duration =
+            new Date(completed_at).getTime() - new Date(started_at).getTime();
+
+        jobs.push({name, url: html_url || url, duration});
+    }
+
+    return {
+        runId,
+        commitHash: run.data.head_sha,
+        htmlUrl: run.data.html_url,
+        jobs,
+        started: run.data.created_at,
+    };
+}
+
+async function loadConfig(
+    client: Client,
+    pullRequest: number,
+): Promise<Config> {
+    const {
+        data: {default_branch: defaultBranch},
+    } = await client.rest.repos.get(ctx.repo);
+
+    const currentRunId = ctx.runId;
+    const workflowId = ctx.workflow;
+    const jobsToMonitor = core.getMultilineInput("jobs", {required: true});
+
+    return {
+        currentRunId,
+        defaultBranch,
+        workflowId,
+        jobsToMonitor,
+        pullRequest,
+    };
+}
+
+function formatComment(timings: CommentInputs): string {
+    const {currentRun, jobNames, defaultBranch} = timings;
+
+    const lines: string[] = [header];
+    lines.push("");
+
+    const tableHeader = ["Run", ...jobNames];
+    lines.push("| " + tableHeader.join(" | ") + " |");
+    lines.push("| " + tableHeader.map(() => "---") + " |");
+
+    if (defaultBranch) {
+        lines.push(
+            commentRow(defaultBranch, jobNames, defaultBranch.branchName),
+        );
+    }
+
+    lines.push(commentRow(currentRun, jobNames));
+
+    lines.push("");
+    lines.push(
+        `<small>🤖 Beep. Boop. I'm a bot. If you find any issues, please report them to <a href="${packageJson.homepage}">${packageJson.homepage}</a>.</small>`,
+    );
+
+    return lines.join("\n");
+}
+
+function commentRow(
+    run: WorkflowRun,
+    columns: string[],
+    name: string | undefined = undefined,
+): string {
+    const {htmlUrl, jobs} = run;
+    if (!name) {
+        name = run.commitHash;
+    }
+
+    const label = `[${name}](${htmlUrl})`;
+    const row = [label];
+
+    for (const column of columns) {
+        const job = jobs.find(j => j.name == column);
+        if (job) {
+            const url = job.url;
+            const duration = formatDuration(job.duration);
+            row.push(`[${duration}](${url})`);
+        } else {
+            row.push("-");
+        }
+    }
+
+    return "| " + row.join(" | ") + " |";
 }
 
 async function postTimings(client: Client, body: string) {
@@ -79,40 +326,6 @@ async function postTimings(client: Client, body: string) {
     }
 }
 
-function getSeverity(percentage: number): {change: string; emoji: string} {
-    if (percentage > 50) {
-        return {
-            change: "**regressed severely**",
-            emoji: "😭",
-        };
-    } else if (percentage > 20) {
-        return {
-            change: "regressed a bit",
-            emoji: "😥",
-        };
-    } else if (percentage > 0) {
-        return {
-            change: "regressed slightly",
-            emoji: "🙁",
-        };
-    } else if (percentage > -20) {
-        return {
-            change: "improved slightly",
-            emoji: "🙂",
-        };
-    } else if (percentage > -50) {
-        return {
-            change: "improved a lot",
-            emoji: "🥳",
-        };
-    } else {
-        return {
-            change: "**improved significantly**",
-            emoji: "🤯",
-        };
-    }
-}
-
 function formatDuration(totalSeconds: number): string {
     totalSeconds = Math.abs(totalSeconds);
     const minutes = Math.floor(totalSeconds / 60);
@@ -125,67 +338,6 @@ function formatDuration(totalSeconds: number): string {
     } else {
         return `${secs}s`;
     }
-}
-
-type CurrentRun = {
-    duration: number;
-    workflowId: number;
-    url: string;
-};
-
-async function currentRun(client: Client): Promise<CurrentRun> {
-    const currentRun = await client.rest.actions.getWorkflowRun({
-        owner,
-        repo,
-        run_id: ctx.runId,
-    });
-    const {run_started_at, workflow_id} = currentRun.data;
-    if (!run_started_at) {
-        throw new Error("Unable to determine when the current run started");
-    }
-
-    const durationMs =
-        new Date().getTime() - new Date(run_started_at).getTime();
-
-    return {
-        duration: durationMs / 1000,
-        workflowId: workflow_id,
-        url: currentRun.data.html_url,
-    };
-}
-
-async function defaultBranchRunTime(
-    client: Client,
-    workflow: number,
-): Promise<{previousRun: number; branch: string} | undefined> {
-    const {
-        data: {default_branch},
-    } = await client.rest.repos.get(ctx.repo);
-
-    const historicalRuns = await client.rest.actions.listWorkflowRuns({
-        owner,
-        repo,
-        workflow_id: workflow,
-    });
-
-    const successfulRuns = historicalRuns.data.workflow_runs.filter(
-        run =>
-            run.head_branch == default_branch &&
-            run.status == "completed" &&
-            run.conclusion == "success",
-    );
-
-    const latestRun = successfulRuns.shift();
-    if (!latestRun || !latestRun.run_started_at) {
-        return;
-    }
-
-    const lastUpdated = new Date(latestRun.updated_at).getTime();
-    const started = new Date(latestRun.run_started_at).getTime();
-    return {
-        previousRun: (lastUpdated - started) / 1000,
-        branch: default_branch,
-    };
 }
 
 run();
