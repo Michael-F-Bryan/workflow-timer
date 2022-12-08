@@ -214,10 +214,14 @@ async function getTimings(
             continue;
         }
 
-        const duration =
+        const milliseconds =
             new Date(completed_at).getTime() - new Date(started_at).getTime();
 
-        const jobTimings = {name, url: html_url || url, duration};
+        const jobTimings = {
+            name,
+            url: html_url || url,
+            duration: Math.round(milliseconds / 1000),
+        };
         console.log(jobTimings);
         jobs.push(jobTimings);
     }
