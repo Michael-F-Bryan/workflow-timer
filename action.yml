@@ -5,6 +5,9 @@ inputs:
   token:
     required: true
     description: "A GitHub token that can access this repo (e.g. `secrets.GITHUB_TOKEN`)"
+  jobs:
+    required: true
+    description: "A list of all the jobs to check timings for, with one job name per line."
 runs:
   using: "node16"
   main: "dist/index.js"
