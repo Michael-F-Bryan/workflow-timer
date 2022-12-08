@@ -147,6 +147,7 @@ async function calculateAllTimings(
         defaultBranch,
         previousRuns,
         jobNames: config.jobsToMonitor,
+        message: config.message,
     };
 }
 
