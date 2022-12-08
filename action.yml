@@ -8,6 +8,9 @@ inputs:
   jobs:
     required: true
     description: "A list of all the jobs to check timings for, with one job name per line."
+  message:
+    required: false
+    description: "A message to include when reporting timings."
 runs:
   using: "node16"
   main: "dist/index.js"

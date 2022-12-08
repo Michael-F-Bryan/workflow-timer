@@ -28,17 +28,21 @@ type Config = {
      * Which jobs do we want to monitor?
      */
     jobsToMonitor: string[];
+    /** A free-form message added to the top of the comment. */
+    message?: string;
 };
 
 type CommentInputs = {
     /** The timings we'll be comparing against */
-    defaultBranch?: WorkflowRun & {branchName: string};
+    defaultBranch?: WorkflowRun;
     /** The timings for the current CI run. */
     currentRun: WorkflowRun;
     /** Timing information for previous runs in the same PR. */
     previousRuns: WorkflowRun[];
     /** The names of each of the jobs we are measuring. */
     jobNames: string[];
+    /** A free-form message added to the top of the comment. */
+    message?: string;
 };
 
 /**
@@ -49,8 +53,8 @@ type WorkflowRun = {
     runId: number;
     /** The URL for viewing the overall run on GitHub. */
     htmlUrl: string;
-    /** The commit the workflow corresponds to. */
-    commitHash: string;
+    /** A human-friendly string to use when showing this run to the user. */
+    displayName: string;
     /** Timings for each of the jobs in the workflow. */
     jobs: JobTimes[];
     /** When the run was started. */
@@ -64,10 +68,20 @@ type JobTimes = {
     duration: number;
 };
 
+type Inputs = {
+    token: string;
+    message: string;
+    jobs: string[];
+};
+
 async function run() {
     try {
-        const token = core.getInput("token", {required: true});
-        const client = github.getOctokit(token);
+        const inputs: Inputs = {
+            token: core.getInput("token", {required: true}),
+            message: core.getInput("message"),
+            jobs: core.getMultilineInput("jobs", {required: true}),
+        };
+        const client = github.getOctokit(inputs.token);
 
         const pullRequest = ctx.payload.pull_request?.number;
 
@@ -78,7 +92,7 @@ async function run() {
             return;
         }
 
-        const config: Config = await loadConfig(client, pullRequest);
+        const config: Config = await loadConfig(client, pullRequest, inputs);
 
         console.log("Loaded configuration", config);
 
@@ -150,7 +164,7 @@ async function getDefaultBranchTimings(
     branch: string,
     workflow: number,
     jobNames: string[],
-): Promise<(WorkflowRun & {branchName: string}) | undefined> {
+): Promise<WorkflowRun | undefined> {
     const historicalRuns = await client.rest.actions.listWorkflowRuns({
         owner,
         repo,
@@ -175,8 +189,8 @@ async function getDefaultBranchTimings(
 
     const timings = await getTimings(client, latestRun.id, jobNames);
     return {
-        branchName: branch,
         ...timings,
+        displayName: branch,
     };
 }
 
@@ -235,7 +249,7 @@ async function getTimings(
 
     return {
         runId,
-        commitHash: run.data.head_sha,
+        displayName: run.data.head_sha.substring(0, 7),
         htmlUrl: run.data.html_url,
         jobs,
         started: run.data.created_at,
@@ -245,6 +259,7 @@ async function getTimings(
 async function loadConfig(
     client: Client,
     pullRequest: number,
+    inputs: Inputs,
 ): Promise<Config> {
     const {
         data: {default_branch: defaultBranch},
@@ -260,35 +275,39 @@ async function loadConfig(
         run_id: currentRunId,
     });
 
-    const jobsToMonitor = core.getMultilineInput("jobs", {required: true});
-
     return {
         currentRunId,
+        message: inputs.message,
         defaultBranch,
         workflowId,
-        jobsToMonitor,
+        jobsToMonitor: inputs.jobs,
         pullRequest,
     };
 }
 
-function formatComment(timings: CommentInputs): string {
-    const {currentRun, jobNames, defaultBranch} = timings;
+function formatComment(comment: CommentInputs): string {
+    const {currentRun, jobNames, defaultBranch} = comment;
 
     const lines: string[] = [header];
     lines.push("");
+
+    if (comment.message) {
+        lines.push(comment.message);
+        lines.push("");
+    }
 
     const tableHeader = ["Run", ...jobNames];
     lines.push("| " + tableHeader.join(" | ") + " |");
     lines.push("| " + tableHeader.map(() => "---").join(" | ") + " |");
 
     if (defaultBranch) {
-        lines.push(
-            commentRow(defaultBranch, jobNames, defaultBranch.branchName),
-        );
+        lines.push(commentRow(defaultBranch, jobNames));
     }
 
     lines.push(commentRow(currentRun, jobNames));
 
+    lines.push("");
+    lines.push("---");
     lines.push("");
     lines.push(
         `🤖 *Beep. Boop. I'm a bot. If you find any issues, please report them to <${packageJson.homepage}>.*`,
@@ -304,7 +323,7 @@ function commentRow(
 ): string {
     const {htmlUrl, jobs} = run;
     if (!name) {
-        name = run.commitHash;
+        name = run.displayName;
     }
 
     const label = `[${name}](${htmlUrl})`;
