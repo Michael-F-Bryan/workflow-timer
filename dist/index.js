@@ -103,6 +103,7 @@ function calculateAllTimings(client, config) {
             defaultBranch,
             previousRuns,
             jobNames: config.jobsToMonitor,
+            message: config.message,
         };
     });
 }
