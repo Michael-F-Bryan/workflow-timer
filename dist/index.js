@@ -60,14 +60,18 @@ function run() {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const token = core.getInput("token", { required: true });
-            const client = github.getOctokit(token);
+            const inputs = {
+                token: core.getInput("token", { required: true }),
+                message: core.getInput("message"),
+                jobs: core.getMultilineInput("jobs", { required: true }),
+            };
+            const client = github.getOctokit(inputs.token);
             const pullRequest = (_a = ctx.payload.pull_request) === null || _a === void 0 ? void 0 : _a.number;
             if (pullRequest == undefined) {
                 core.notice("This workflow only runs on pull requests. Skipping...");
                 return;
             }
-            const config = yield loadConfig(client, pullRequest);
+            const config = yield loadConfig(client, pullRequest, inputs);
             console.log("Loaded configuration", config);
             const timings = yield calculateAllTimings(client, config);
             const body = formatComment(timings);
@@ -123,7 +127,7 @@ function getDefaultBranchTimings(client, branch, workflow, jobNames) {
         }
         console.log(`Last successful run for the default branch (${branch}) was ${latestRun.id} at ${latestRun.updated_at} (${latestRun.html_url})`);
         const timings = yield getTimings(client, latestRun.id, jobNames);
-        return Object.assign({ branchName: branch }, timings);
+        return Object.assign(Object.assign({}, timings), { displayName: branch });
     });
 }
 function getTimings(client, runId, jobNames) {
@@ -150,8 +154,12 @@ function getTimings(client, runId, jobNames) {
                 core.warning(`Unable to get timings for "${name}" on run ${runId} (${run.data.html_url}) because it hasn't finished yet (${html_url})`);
                 continue;
             }
-            const duration = new Date(completed_at).getTime() - new Date(started_at).getTime();
-            const jobTimings = { name, url: html_url || url, duration };
+            const milliseconds = new Date(completed_at).getTime() - new Date(started_at).getTime();
+            const jobTimings = {
+                name,
+                url: html_url || url,
+                duration: Math.round(milliseconds / 1000),
+            };
             console.log(jobTimings);
             jobs.push(jobTimings);
         }
@@ -161,14 +169,14 @@ function getTimings(client, runId, jobNames) {
         }
         return {
             runId,
-            commitHash: run.data.head_sha,
+            displayName: run.data.head_sha.substring(0, 7),
             htmlUrl: run.data.html_url,
             jobs,
             started: run.data.created_at,
         };
     });
 }
-function loadConfig(client, pullRequest) {
+function loadConfig(client, pullRequest, inputs) {
     return __awaiter(this, void 0, void 0, function* () {
         const { data: { default_branch: defaultBranch }, } = yield client.rest.repos.get(ctx.repo);
         const currentRunId = ctx.runId;
@@ -177,27 +185,33 @@ function loadConfig(client, pullRequest) {
             repo,
             run_id: currentRunId,
         });
-        const jobsToMonitor = core.getMultilineInput("jobs", { required: true });
         return {
             currentRunId,
+            message: inputs.message,
             defaultBranch,
             workflowId,
-            jobsToMonitor,
+            jobsToMonitor: inputs.jobs,
             pullRequest,
         };
     });
 }
-function formatComment(timings) {
-    const { currentRun, jobNames, defaultBranch } = timings;
+function formatComment(comment) {
+    const { currentRun, jobNames, defaultBranch } = comment;
     const lines = [header];
     lines.push("");
+    if (comment.message) {
+        lines.push(comment.message);
+        lines.push("");
+    }
     const tableHeader = ["Run", ...jobNames];
     lines.push("| " + tableHeader.join(" | ") + " |");
     lines.push("| " + tableHeader.map(() => "---").join(" | ") + " |");
     if (defaultBranch) {
-        lines.push(commentRow(defaultBranch, jobNames, defaultBranch.branchName));
+        lines.push(commentRow(defaultBranch, jobNames));
     }
     lines.push(commentRow(currentRun, jobNames));
+    lines.push("");
+    lines.push("---");
     lines.push("");
     lines.push(`🤖 *Beep. Boop. I'm a bot. If you find any issues, please report them to <${package_json_1.default.homepage}>.*`);
     return lines.join("\n");
@@ -205,7 +219,7 @@ function formatComment(timings) {
 function commentRow(run, columns, name = undefined) {
     const { htmlUrl, jobs } = run;
     if (!name) {
-        name = run.commitHash;
+        name = run.displayName;
     }
     const label = `[${name}](${htmlUrl})`;
     const row = [label];
