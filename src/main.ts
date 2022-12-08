@@ -200,9 +200,12 @@ async function getTimings(
 
     const jobs: JobTimes[] = [];
 
-    for (const job of allJobs.data.jobs.filter(j =>
-        jobNames.includes(j.name),
-    )) {
+    for (const job of allJobs.data.jobs) {
+        console.log("Job:", job);
+        if (!jobNames.includes(job.name)) {
+            continue;
+        }
+
         const {started_at, completed_at, name, html_url, url} = job;
         if (!completed_at) {
             core.warning(
@@ -217,6 +220,13 @@ async function getTimings(
         const jobTimings = {name, url: html_url || url, duration};
         console.log(jobTimings);
         jobs.push(jobTimings);
+    }
+
+    if (jobs.length == 0) {
+        const names = allJobs.data.jobs.map(j => `"${j.name}"`).join(", ");
+        core.warning(
+            `No jobs selected for run ${runId} (${run.data.html_url}). Available jobs: ${names}`,
+        );
     }
 
     return {
@@ -265,7 +275,7 @@ function formatComment(timings: CommentInputs): string {
 
     const tableHeader = ["Run", ...jobNames];
     lines.push("| " + tableHeader.join(" | ") + " |");
-    lines.push("| " + tableHeader.map(() => "---") + " |");
+    lines.push("| " + tableHeader.map(() => "---").join(" | ") + " |");
 
     if (defaultBranch) {
         lines.push(
@@ -277,7 +287,7 @@ function formatComment(timings: CommentInputs): string {
 
     lines.push("");
     lines.push(
-        `<small>🤖 Beep. Boop. I'm a bot. If you find any issues, please report them to <a href="${packageJson.homepage}">${packageJson.homepage}</a>.</small>`,
+        `🤖 *Beep. Boop. I'm a bot. If you find any issues, please report them to <${packageJson.homepage}>.*`,
     );
 
     return lines.join("\n");
