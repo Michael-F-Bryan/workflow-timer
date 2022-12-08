@@ -60,7 +60,7 @@ function run() {
     var _a;
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const token = core.getInput("token");
+            const token = core.getInput("token", { required: true });
             const client = github.getOctokit(token);
             const pullRequest = (_a = ctx.payload.pull_request) === null || _a === void 0 ? void 0 : _a.number;
             if (pullRequest == undefined) {
@@ -68,6 +68,7 @@ function run() {
                 return;
             }
             const config = yield loadConfig(client, pullRequest);
+            console.log("Loaded configuration", config);
             const timings = yield calculateAllTimings(client, config);
             const body = formatComment(timings);
             yield postTimings(client, body);
@@ -88,7 +89,9 @@ function run() {
 }
 function calculateAllTimings(client, config) {
     return __awaiter(this, void 0, void 0, function* () {
+        console.log("Calculating timings...");
         const currentRun = yield getTimings(client, config.currentRunId, config.jobsToMonitor);
+        console.log("Current timings", JSON.stringify(currentRun, null, 2));
         const defaultBranch = yield getDefaultBranchTimings(client, config.defaultBranch, config.workflowId, config.jobsToMonitor);
         const previousRuns = yield getPreviousRunTimings(client, config.pullRequest, config.workflowId, config.jobsToMonitor);
         return {
@@ -106,19 +109,19 @@ function getPreviousRunTimings(client, pr, workflow, jobNames) {
 }
 function getDefaultBranchTimings(client, branch, workflow, jobNames) {
     return __awaiter(this, void 0, void 0, function* () {
-        const { data: { default_branch }, } = yield client.rest.repos.get(ctx.repo);
         const historicalRuns = yield client.rest.actions.listWorkflowRuns({
             owner,
             repo,
             workflow_id: workflow,
         });
-        const successfulRuns = historicalRuns.data.workflow_runs.filter(run => run.head_branch == default_branch &&
+        const successfulRuns = historicalRuns.data.workflow_runs.filter(run => run.head_branch == branch &&
             run.status == "completed" &&
             run.conclusion == "success");
         const latestRun = successfulRuns.shift();
         if (!latestRun || !latestRun.run_started_at) {
             return;
         }
+        console.log(`Last successful run for the default branch (${branch}) was ${latestRun.id} at ${latestRun.updated_at} (${latestRun.html_url})`);
         const timings = yield getTimings(client, latestRun.id, jobNames);
         return Object.assign({ branchName: branch }, timings);
     });
@@ -130,6 +133,7 @@ function getTimings(client, runId, jobNames) {
             repo,
             run_id: runId,
         });
+        console.log(`Getting timings for run ${runId} (${run.data.html_url})`);
         const allJobs = yield client.rest.actions.listJobsForWorkflowRun({
             owner,
             repo,
@@ -143,7 +147,9 @@ function getTimings(client, runId, jobNames) {
                 continue;
             }
             const duration = new Date(completed_at).getTime() - new Date(started_at).getTime();
-            jobs.push({ name, url: html_url || url, duration });
+            const jobTimings = { name, url: html_url || url, duration };
+            console.log(jobTimings);
+            jobs.push(jobTimings);
         }
         return {
             runId,
@@ -158,7 +164,11 @@ function loadConfig(client, pullRequest) {
     return __awaiter(this, void 0, void 0, function* () {
         const { data: { default_branch: defaultBranch }, } = yield client.rest.repos.get(ctx.repo);
         const currentRunId = ctx.runId;
-        const workflowId = ctx.workflow;
+        const { data: { workflow_id: workflowId }, } = yield client.rest.actions.getWorkflowRun({
+            owner,
+            repo,
+            run_id: currentRunId,
+        });
         const jobsToMonitor = core.getMultilineInput("jobs", { required: true });
         return {
             currentRunId,

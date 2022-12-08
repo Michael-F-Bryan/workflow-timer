@@ -21,7 +21,7 @@ type Config = {
     /**
      * The ID for the workflow being checked (e.g. ".github/workflows/ci.yml").
      */
-    workflowId: string;
+    workflowId: number;
     /** The ID for the current run of this workflow. */
     currentRunId: number;
     /**
@@ -64,15 +64,9 @@ type JobTimes = {
     duration: number;
 };
 
-type CurrentRun = {
-    duration: number;
-    workflowId: number;
-    url: string;
-};
-
 async function run() {
     try {
-        const token = core.getInput("token");
+        const token = core.getInput("token", {required: true});
         const client = github.getOctokit(token);
 
         const pullRequest = ctx.payload.pull_request?.number;
@@ -85,6 +79,9 @@ async function run() {
         }
 
         const config: Config = await loadConfig(client, pullRequest);
+
+        console.log("Loaded configuration", config);
+
         const timings: CommentInputs = await calculateAllTimings(
             client,
             config,
@@ -108,11 +105,14 @@ async function calculateAllTimings(
     client: Client,
     config: Config,
 ): Promise<CommentInputs> {
+    console.log("Calculating timings...");
+
     const currentRun = await getTimings(
         client,
         config.currentRunId,
         config.jobsToMonitor,
     );
+    console.log("Current timings", JSON.stringify(currentRun, null, 2));
 
     const defaultBranch = await getDefaultBranchTimings(
         client,
@@ -139,7 +139,7 @@ async function calculateAllTimings(
 async function getPreviousRunTimings(
     client: Client,
     pr: number,
-    workflow: string,
+    workflow: number,
     jobNames: string[],
 ): Promise<WorkflowRun[]> {
     return [];
@@ -148,13 +148,9 @@ async function getPreviousRunTimings(
 async function getDefaultBranchTimings(
     client: Client,
     branch: string,
-    workflow: string,
+    workflow: number,
     jobNames: string[],
 ): Promise<(WorkflowRun & {branchName: string}) | undefined> {
-    const {
-        data: {default_branch},
-    } = await client.rest.repos.get(ctx.repo);
-
     const historicalRuns = await client.rest.actions.listWorkflowRuns({
         owner,
         repo,
@@ -163,7 +159,7 @@ async function getDefaultBranchTimings(
 
     const successfulRuns = historicalRuns.data.workflow_runs.filter(
         run =>
-            run.head_branch == default_branch &&
+            run.head_branch == branch &&
             run.status == "completed" &&
             run.conclusion == "success",
     );
@@ -172,6 +168,10 @@ async function getDefaultBranchTimings(
     if (!latestRun || !latestRun.run_started_at) {
         return;
     }
+
+    console.log(
+        `Last successful run for the default branch (${branch}) was ${latestRun.id} at ${latestRun.updated_at} (${latestRun.html_url})`,
+    );
 
     const timings = await getTimings(client, latestRun.id, jobNames);
     return {
@@ -190,6 +190,8 @@ async function getTimings(
         repo,
         run_id: runId,
     });
+    console.log(`Getting timings for run ${runId} (${run.data.html_url})`);
+
     const allJobs = await client.rest.actions.listJobsForWorkflowRun({
         owner,
         repo,
@@ -212,7 +214,9 @@ async function getTimings(
         const duration =
             new Date(completed_at).getTime() - new Date(started_at).getTime();
 
-        jobs.push({name, url: html_url || url, duration});
+        const jobTimings = {name, url: html_url || url, duration};
+        console.log(jobTimings);
+        jobs.push(jobTimings);
     }
 
     return {
@@ -233,7 +237,15 @@ async function loadConfig(
     } = await client.rest.repos.get(ctx.repo);
 
     const currentRunId = ctx.runId;
-    const workflowId = ctx.workflow;
+
+    const {
+        data: {workflow_id: workflowId},
+    } = await client.rest.actions.getWorkflowRun({
+        owner,
+        repo,
+        run_id: currentRunId,
+    });
+
     const jobsToMonitor = core.getMultilineInput("jobs", {required: true});
 
     return {
