@@ -140,7 +140,11 @@ function getTimings(client, runId, jobNames) {
             run_id: runId,
         });
         const jobs = [];
-        for (const job of allJobs.data.jobs.filter(j => jobNames.includes(j.name))) {
+        for (const job of allJobs.data.jobs) {
+            console.log("Job:", job);
+            if (!jobNames.includes(job.name)) {
+                continue;
+            }
             const { started_at, completed_at, name, html_url, url } = job;
             if (!completed_at) {
                 core.warning(`Unable to get timings for "${name}" on run ${runId} (${run.data.html_url}) because it hasn't finished yet (${html_url})`);
@@ -150,6 +154,10 @@ function getTimings(client, runId, jobNames) {
             const jobTimings = { name, url: html_url || url, duration };
             console.log(jobTimings);
             jobs.push(jobTimings);
+        }
+        if (jobs.length == 0) {
+            const names = allJobs.data.jobs.map(j => `"${j.name}"`).join(", ");
+            core.warning(`No jobs selected for run ${runId} (${run.data.html_url}). Available jobs: ${names}`);
         }
         return {
             runId,
@@ -185,13 +193,13 @@ function formatComment(timings) {
     lines.push("");
     const tableHeader = ["Run", ...jobNames];
     lines.push("| " + tableHeader.join(" | ") + " |");
-    lines.push("| " + tableHeader.map(() => "---") + " |");
+    lines.push("| " + tableHeader.map(() => "---").join(" | ") + " |");
     if (defaultBranch) {
         lines.push(commentRow(defaultBranch, jobNames, defaultBranch.branchName));
     }
     lines.push(commentRow(currentRun, jobNames));
     lines.push("");
-    lines.push(`<small>🤖 Beep. Boop. I'm a bot. If you find any issues, please report them to <a href="${package_json_1.default.homepage}">${package_json_1.default.homepage}</a>.</small>`);
+    lines.push(`🤖 *Beep. Boop. I'm a bot. If you find any issues, please report them to <${package_json_1.default.homepage}>.*`);
     return lines.join("\n");
 }
 function commentRow(run, columns, name = undefined) {
